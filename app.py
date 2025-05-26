@@ -2,6 +2,14 @@ from io import BytesIO
 import streamlit as st
 import base64
 import time
+import numpy as np
+import pickle
+import faiss
+from sentence_transformers import SentenceTransformer
+import requests
+import json
+import ast
+import re
 
 # Configure page
 st.set_page_config(
@@ -10,6 +18,182 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+@st.cache_resource
+def load_models():
+    """Load embedding model, FAISS index and metadata"""
+    try:
+        # Load embedding model
+        embedding_model = SentenceTransformer('./output/embedding_model')  # Remplacez par votre modèle
+        
+        # Load FAISS index
+        faiss_index = faiss.read_index('./output/faiss_index.idx')
+        
+        # Load metadata
+        with open('./output/faiss_metadata.pkl', 'rb') as f:
+            metadata = pickle.load(f)
+        
+        return embedding_model, faiss_index, metadata
+    except Exception as e:
+        st.error(f"Erreur lors du chargement des modèles: {e}")
+        return None, None, None
+
+OPENROUTER_API_KEY = "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"  
+def call_deepseek_v3(messages, temperature=0.7, max_tokens=1000):
+    """Call DeepSeek V3 via OpenRouter API"""
+    
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://kaggle.com",  
+        "X-Title": "Legal RAG Assistant",    
+    }
+    
+    data = {
+        "model": "deepseek/deepseek-chat-v3-0324:free", 
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(data))
+        response.raise_for_status()  
+        
+        result = response.json()
+        return result['choices'][0]['message']['content']
+        
+    except requests.exceptions.RequestException as e:
+        return f"API Request Error: {str(e)}"
+    except KeyError as e:
+        return f"Response Parse Error: {str(e)}"
+    except Exception as e:
+        return f"Unexpected Error: {str(e)}"
+
+def detect_language(text):
+    """Detects if text is Arabic (RTL)"""
+    return bool(re.search('[\u0600-\u06FF\u0750-\u077F]', text))
+
+
+def translate_to_french(text):
+    is_arabic = detect_language(text)
+    # Get the translation
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a translator. Translate the given text to French. ONLY return the translation, nothing else!"
+        },
+        {
+            "role": "user", 
+            "content": f"Translate this to French: {text}"
+        }
+    ]
+    
+    return call_deepseek_v3(messages, temperature=0.1, max_tokens=200), is_arabic
+
+def is_no_information_response(response):
+    """Check if the response indicates no sufficient information"""
+    no_info_indicators = [
+        "je ne dispose pas d'informations suffisantes",
+        "i don't have enough information", 
+        "لا أملك معلومات كافية",
+        "pas d'informations suffisantes",
+        "not enough information",
+        "insufficient information",
+        "no sufficient information"
+    ]
+    
+    response_lower = response.lower()
+    return any(indicator in response_lower for indicator in no_info_indicators)
+
+def advanced_rag_query(query, top_k=5):
+    """Advanced RAG with language detection and strict context-only responses"""
+    
+    # Store original query for language detection
+    original_query = query
+    
+    # Translate query to French for embedding consistency
+    french_query, original_lang = translate_to_french(query)
+    # Retrieve documents using French query
+    query_embedding = embedding_model.encode([french_query])
+    query_embedding = np.array(query_embedding).astype('float32')
+    scores, indices = faiss_index.search(query_embedding, top_k)
+    
+    # Format context with document numbering
+    context_parts = []
+    for i, (score, idx) in enumerate(zip(scores[0], indices[0]), 1):
+        if idx != -1:
+            doc_text = metadata[idx]
+            context_parts.append(f"Document {i}:\n{doc_text}")
+    
+    context = "\n\n".join(context_parts)
+
+    document_ids = []
+    for ctx in context_parts:
+        element = ctx.split('\n')
+        element = ast.literal_eval(element[-1])
+        for ele in element:
+            document_ids.append(ele['doc_id'])
+    
+    html_links = ""
+    for doc_id in document_ids:
+        year = doc_id[1:5]
+        number = str(int(doc_id[5:]))  # remove leading zeros
+        title = f"الجريدة الرسمية رقم {number} عام {year}"
+        url = f"https://www.joradp.dz/FTP/JO-FRANCAIS/{year}/{doc_id}.pdf"
+        html_links += f'<br>{title}: <a href="{url}" target="_blank">{url}</a>'
+
+
+
+    # Language-adaptive prompt template
+    prompt = f"""You are a legal assistant expert. Answer the user's question using ONLY the information provided in the documents below and with the same LANGUAGE as the user's question. 
+
+IMPORTANT INSTRUCTIONS:
+- Respond in the SAME LANGUAGE as this {original_query} question's language
+- Use ONLY information from the provided documents
+- DO NOT use your general knowledge or training data, if the answer is not mentioned in the CONTEXT DOCUMENTS say that i do not have enogh inforamation
+- Reference specific documents in the end of the answer with a title is Sources:
+- DO NOT list or include a source section at the end of your answer
+
+CONTEXT DOCUMENTS provided:
+{context}
+
+USER QUESTION: {original_query}
+
+CONSTRAINTS:
+- Answer language: Same as the question language
+- Information source: Only the provided documents above
+
+ANSWER:"""
+
+    messages = [
+        {
+            "role": "system", 
+            "content": "You are a legal assistant. You must respond in the same language as the user's question and use ONLY the information from the provided context documents. Never use your general knowledge."
+        },
+        {
+            "role": "user", 
+            "content": prompt
+        }
+    ]
+
+    response = call_deepseek_v3(messages, temperature=0.2, max_tokens=1500)
+
+    if is_no_information_response(response):
+        return None
+    
+    return response, html_links, original_lang
+
+embedding_model, faiss_index, metadata = load_models()
+
+if embedding_model is None:
+    st.error("يرجى المحاولة مجددا")
+    st.stop()
+
+
+
 
 # Custom CSS for Arabic RTL layout and styling
 st.markdown("""
@@ -97,8 +281,6 @@ st.markdown("""
         margin: 10px 0;
         max-width: 80%;
         margin: auto;
-        direction: rtl;
-        text-align: right;
     }
     
     .response-title {
@@ -122,8 +304,6 @@ st.markdown("""
         font-weight: 400;
         color: #000;
         line-height: 1.6;
-        direction: rtl;
-        text-align: right;
     }
     
     .message-content ul {
@@ -140,13 +320,14 @@ st.markdown("""
         font-size: 14px;
         color: #666;
         margin-top: 10px;
+        padding-bottom: 80px;
         direction: rtl;
         text-align: right;
     }
     
     .info-source a {
         color: #1D5038;
-        text-decoration: none;
+        text-decoration: underline;
     }
     
     .stTextInput > div > div > input {
@@ -171,6 +352,14 @@ st.markdown("""
         border: none;
         background-color: transparent;
     }
+
+    .st-bs {
+        background: white;
+    }
+
+    .st-emotion-cache-8atqhb {
+        display: flex;
+    }
     
     .stButton > button {
         background-color: #1D5038;
@@ -179,8 +368,9 @@ st.markdown("""
         border-radius: 10px;
         font-weight: bold;
         font-family: "Tajawal", sans-serif;
-        width: 100%;
+        width: 30%;
         padding: 12px;
+        margin: 0 auto;
     }
     
     .stButton > button:hover {
@@ -242,9 +432,47 @@ st.markdown("""
     }
     
     .st-emotion-cache-t1wise {
-        padding: 2rem 0 10rem;
+        padding: 2rem 0 0;
     }
-</style>
+
+    .input-container {
+        position: relative;
+        width: 100%;
+    }
+
+    .inside-button {
+        position: absolute;
+        right: 8px;
+        top: 6px;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background-color: #1D5038;
+        color: white;
+        border: none;
+        padding: 4px 8px;
+        font-size: 14px;
+        border-radius: 4px;
+        z-index: 1;
+    }
+
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    .st-emotion-cache-ocqkz7 {
+        position: fixed;
+        bottom: 10px;
+        padding-top: 6px;
+        width: 100%;
+        background: white;
+    }
+
+    .hidden-button {
+        display: none;
+    }
+    </style>
 """, unsafe_allow_html=True)
 
 def image_to_base64(path):
@@ -253,8 +481,8 @@ def image_to_base64(path):
     return base64.b64encode(data).decode()
 
 # Convert images to base64
-img1_base64 = image_to_base64("image_5.png")
-img2_base64 = image_to_base64("image_4.png")
+img1_base64 = image_to_base64("dz_image.png")
+img2_base64 = image_to_base64("law_image.png")
 
 # Header
 st.markdown(f"""
@@ -270,36 +498,47 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Initialize session state
+
+# Initialize session state variables for existing chat functionality
+if "user_input" not in st.session_state:
+    st.session_state.user_input = ""
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
+if "processing" not in st.session_state:
+    st.session_state.processing = False
 if "first_message" not in st.session_state:
     st.session_state.first_message = True
 
-# Sample responses dictionary
-responses = {
-    'متى تم انهاء مهام وزير التجارة الخارجية وترقية الصادرات محمد بوخاري؟': {
-        'answer': '''تم انهاء مهام وزير التجارة الخارجية وترقية الصادرات محمد بوخاري, بناءً على الدستور، وخاصة المواد 91-7 منه، بمقتضى المرسوم الرئاسي رقم 24-374 المؤرخ في 16 جمادى الأولى عام 1446 هـ، الموافق 18 نوفمبر سنة 2024، والمتضمن تعيين أعضاء الحكومة، المعدل، أصدر رئيس الجمهورية، وزير الدفاع الوطني، مرسوما رئاسيا رقم 25-109 المؤرخ في 15 شوال 1446 الموافق ل 14 أفريل 2025 حيث تنص المادة الأولى على انهاء مهام السيد محمد بوخاري وزير التجارة الخارجية وترقية الصادرات. وتوضح المادة الثانية أن هذا المرسوم سيُنشر في الجريدة الرسمية للجمهورية الجزائرية الديمقراطية الشعبية.''',
-        'source': 'الجريدة الرسمية رقم 22 عام 2025',
-        'link': 'https://www.joradp.dz/FTP/jo-arabe/2025/A2025022.pdf'
-    },
-    'كيف يتم تنظيم وضعية المواطنين بعد انهاء خدمتهم العسكرية؟': {
-        'answer': '''يتضمن القانون رقم 20-22 المؤرخ في 3 محرم عام 1444 هـ، الموافق لأول أغسطس 2022، و الذي يتعلق بتنظيم الاحتياط العسكري في الجزائر و يهدف الى تحديد الإطار القانوني الذي يُنظم علاقة الدولة بالمواطنين الذين يُستدعون للخدمة في إطار الاحتياط بعد انتهاء خدمتهم العسكرية أو الوطنية, و الذي جاء لتحديد الحقوق والواجبات المرتبطة بهذه الوضعية بشكل دقيق، ما يلي:
+# Initialize session state variables for dynamic UI
+if 'is_loading' not in st.session_state:
+    st.session_state.is_loading = False
+if 'query_submitted' not in st.session_state:
+    st.session_state.query_submitted = False
+if 'last_query' not in st.session_state:
+    st.session_state.last_query = ""
+if 'input_key' not in st.session_state:
+    st.session_state.input_key = 0
 
-• تعريف الاحتياط العسكري: يتمثل في مجموعة المواطنين الذين أنهوا خدمتهم الوطنية أو العسكرية ويمكن استدعاؤهم عند الحاجة لتعزيز القوات المسلحة الوطنية.
+def handle_submit():
+    """Handle the submit button click"""
+    # Get the current input value using the dynamic key
+    input_key = f"user_input_{st.session_state.input_key}"
+    query = st.session_state.get(input_key, "")
+    if query.strip():  # Only proceed if query is not empty
+        st.session_state.last_query = query
+        st.session_state.is_loading = True
+        st.session_state.query_submitted = True
+        st.session_state.processing = True
+        st.session_state.first_message = False
+        # Add user message to chat
+        st.session_state.messages.append({"role": "user", "content": query.strip()})
+        # Increment key to reset the input
+        st.session_state.input_key += 1
 
-• شروط الاستدعاء: يُمكن استدعاء الاحتياطيين في حالات التمرينات، المناورات، أو في حالات استثنائية مثل الكوارث أو التهديدات الأمنية.
-
-• الواجبات: تشمل الالتزام بالحضور في الوقت المحدد، التحلي بالانضباط العسكري، واحترام السرية المهنية.
-
-• الحقوق: يضمن القانون للمنتسبين للاحتياط الحق في التعويض المالي خلال فترة الاستدعاء، والاحتفاظ بمنصبهم الوظيفي، بالإضافة إلى الاستفادة من التغطية الاجتماعية والصحية.
-
-• العقوبات: ينص القانون على تطبيق إجراءات تأديبية أو قانونية في حال عدم الامتثال للاستدعاء أو مخالفة التعليمات العسكرية.''',
-        'source': 'الجريدة الرسمية رقم 52 عام 2022. لمزيد من المعلومات أنقر هنا',
-        'link': 'https://www.joradp.dz/FTP/jo-arabe/2022/A2022052.pdf'
-    }
-}
+def reset_loading():
+    """Reset loading state after delay"""
+    st.session_state.is_loading = False
+    st.session_state.processing = False
 
 # Chat heading (only show if no messages)
 if not st.session_state.messages:
@@ -312,87 +551,103 @@ for message in st.session_state.messages:
     else:
         st.markdown(f'<div class="bot-message">{message["content"]}</div>', unsafe_allow_html=True)
 
-# Chat input
-user_input = st.text_area(
-    "اكتب سؤالك هنا...",
-    key="user_input",
-    height=100,
-    label_visibility="collapsed",
-    placeholder="اكتب سؤالك هنا..."
-)
-
-# Initialize session state flags
-if "processing" not in st.session_state:
-    st.session_state.processing = False
-if "first_message" not in st.session_state:
-    st.session_state.first_message = True
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# Send button
-col1, col2, col3 = st.columns([2, 1, 2])
-with col2:
-    if not st.session_state.processing:
-        send_button = st.button("إرسال" if st.session_state.first_message else "↑", use_container_width=True)
-    else:
-        send_button = False  # Block sending while processing
-
-# Handle message sending
-if send_button and user_input.strip():
-    st.session_state.processing = True  # Set flag to hide button next rerun
-
-    # Add user message
-    st.session_state.messages.append({"role": "user", "content": user_input.strip()})
-    
+if st.session_state.is_loading:
+    # Loading state: show spinner
     with st.container():
         st.markdown('<div class="loading-spinner"><div class="spinner"></div></div>', unsafe_allow_html=True)
         time.sleep(2)
-
-    # Done processing
-    st.session_state.processing = False
-    st.session_state.first_message = False
     
-    # Generate response
-    if user_input.strip() in responses:
-        response_data = responses[user_input.strip()]
-        bot_response = f'''
-        <div class="response-title">
-            <span class="title-icon">🤖</span> الإجابة :
-        </div>
-        <div class="message-content">
-            {response_data['answer']}
-        </div>
-        <div class="response-title">
-            <span class="title-icon">📂</span> مصدر المعلومات:
-        </div>
-        <div class="info-source">
-            {response_data['source']} <a href="{response_data['link']}" target="_blank">{response_data['link']}</a>
-        </div>
-        '''
-    else:
-        bot_response = '''
-        <div class="response-title">
-            <span class="title-icon">🤖</span> الإجابة :
-        </div>
-        <div class="message-content">
-            عذراً، لا يمكنني الإجابة على هذا السؤال حالياً. يرجى التأكد من صياغة السؤال بشكل صحيح أو طرح سؤال آخر متعلق بالقوانين الجزائرية.<br><br>
-            • تأكد من كتابة السؤال بشكل واضح<br>
-            • حاول استخدام مصطلحات قانونية دقيقة<br>
-            • يمكنك طرح سؤال حول قوانين الأسرة، العمل، العقارات، أو القانون المدني
-        </div>
-        <div class="response-title">
-            <span class="title-icon">📂</span> مصدر المعلومات:
-        </div>
-        <div class="info-source">
-            المنظومة القانونية الجزائرية - دليل المستخدم
-        </div>
-        '''
+    # Generate bot response after loading
+    if st.session_state.last_query:
+        rag_response, html_links, original_lang = advanced_rag_query(st.session_state.last_query)
+        direction = "rtl" if original_lang else "ltr"
+        alignment = "right" if original_lang else "left"
+        if rag_response is None:
+            bot_response = '''
+                <div class="response-title">
+                    <span class="title-icon">🤖</span> الإجابة :
+                </div>
+                <div class="message-content">
+                    عذراً، لا يمكنني الإجابة على هذا السؤال حالياً. يرجى التأكد من صياغة السؤال بشكل صحيح أو طرح سؤال آخر متعلق بالقوانين الجزائرية.<br><br>
+                    • تأكد من كتابة السؤال بشكل واضح<br>
+                    • حاول استخدام مصطلحات قانونية دقيقة<br>
+                    • يمكنك طرح سؤال حول قوانين الأسرة، العمل، العقارات، أو القانون المدني
+                </div>
+                <div class="response-title">
+                    <span class="title-icon">📂</span> مصدر المعلومات:
+                </div>
+                <div class="info-source">
+                    المنظومة القانونية الجزائرية - دليل المستخدم
+                </div>
+            '''
+        else:
+            bot_response = f'''
+                <div class="response-title" style="direction: rtl; text-align: right;">
+                    <span class="title-icon">🤖</span> الإجابة :
+                </div>
+                <div class="message-content" style="direction: {direction}; text-align: {alignment};">
+                    {rag_response}
+                </div>
+                <div class="response-title" style="direction: rtl; text-align: right;">
+                    <span class="title-icon">📂</span> مصدر المعلومات:
+                </div>
+                <div class="info-source">
+                    {html_links}
+                </div>
+            '''
+        
+        # Add bot response to messages
+        st.session_state.messages.append({"role": "assistant", "content": bot_response})
     
-    # Add bot response
-    st.session_state.messages.append({"role": "assistant", "content": bot_response})
-    
-    # Update first message flag
-    st.session_state.first_message = False
-    
-    # Clear input and rerun
+    # After loading, reset state and rerun
+    reset_loading()
     st.rerun()
+
+elif st.session_state.query_submitted:
+    # After first submission: input and button at bottom (button on left, input on right)
+    col1, col2 = st.columns([2, 10])  # Button smaller, input larger
+    
+    with col1:
+        st.write("")  # Add spacing to align button with input
+        send_button = st.button("إرسال", key=f"submit_{st.session_state.input_key}")
+    
+    with col2:
+        user_input = st.text_area(
+            "اكتب سؤالك هنا...", 
+            key=f"user_input_{st.session_state.input_key}",
+            label_visibility="collapsed",
+            height=80,
+            placeholder="اكتب سؤالك هنا..."
+        )
+    st.markdown(
+        """
+        <div style='text-align: center; font-size: 16px; color: #666; position: fixed; bottom: 0; left: 30%; transform: translateX(-20%); background: white;'>
+             .سيتم الرد على سؤالك بناءً على الوثائق القانونية المتوفرة فقط. يرجى التحقق من المعلومات المتحصل عليها
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
+    
+    # Handle new submission
+    if send_button and user_input and user_input.strip():
+        st.session_state.last_query = user_input.strip()
+        st.session_state.is_loading = True
+        st.session_state.messages.append({"role": "user", "content": user_input.strip()})
+        st.session_state.input_key += 1
+        st.rerun()
+
+else:
+    # Initial state: input above button
+    user_input = st.text_area(
+        "اكتب سؤالك هنا...",
+        key=f"user_input_{st.session_state.input_key}",
+        height=100,
+        label_visibility="collapsed",
+        placeholder="اكتب سؤالك هنا..."
+    )
+    
+    send_button = st.button(
+        "إرسال", 
+        key=f"submit_{st.session_state.input_key}",
+        on_click=handle_submit
+    )
