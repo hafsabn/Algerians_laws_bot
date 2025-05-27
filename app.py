@@ -498,8 +498,8 @@ def image_to_base64(path):
     return base64.b64encode(data).decode()
 
 # Convert images to base64
-img1_base64 = image_to_base64("dz_image.png")
-img2_base64 = image_to_base64("law_image.png")
+img1_base64 = image_to_base64("./images/dz_image.png")
+img2_base64 = image_to_base64("./images/law_image.png")
 
 # Header
 st.markdown(f"""
