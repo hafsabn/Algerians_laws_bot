@@ -10,6 +10,7 @@ import requests
 import json
 import ast
 import re
+from openai import OpenAI
 
 # Configure page
 st.set_page_config(
@@ -38,7 +39,21 @@ def load_models():
         st.error(f"Erreur lors du chargement des modèles: {e}")
         return None, None, None
 
-OPENROUTER_API_KEY = "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"  
+CHATGPT_APLI_KEY = ""  
+client = OpenAI(api_key=CHATGPT_APLI_KEY)
+
+def call_gpt3 (messages, temperature=0.3, max_tokens=1024):
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        # model="gpt-3.5-turbo",
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    return response.choices[0].message.content.strip()
+
+
+OPENROUTER_API_KEY = ""  
 def call_deepseek_v3(messages, temperature=0.7, max_tokens=1000):
     """Call DeepSeek V3 via OpenRouter API"""
     
@@ -90,8 +105,11 @@ def translate_to_french(text):
             "content": f"Translate this to French: {text}"
         }
     ]
+
+    # response = call_gpt3(messages)
+    response = call_deepseek_v3(messages)
     
-    return call_deepseek_v3(messages, temperature=0.1, max_tokens=200), is_arabic
+    return response, is_arabic
 
 def is_no_information_response(response):
     """Check if the response indicates no sufficient information"""
@@ -138,16 +156,14 @@ def advanced_rag_query(query, top_k=5):
             document_ids.append(ele['doc_id'])
     
     html_links = ""
-    for doc_id in document_ids:
+    for i, doc_id in enumerate(document_ids):
         year = doc_id[1:5]
         number = str(int(doc_id[5:]))  # remove leading zeros
-        title = f"الجريدة الرسمية رقم {number} عام {year}"
+        title = f"- المستند {i}: الجريدة الرسمية رقم {number} عام {year}"
         url = f"https://www.joradp.dz/FTP/JO-FRANCAIS/{year}/{doc_id}.pdf"
         html_links += f'<br>{title}: <a href="{url}" target="_blank">{url}</a>'
 
 
-
-    # Language-adaptive prompt template
     prompt = f"""You are a legal assistant expert. Answer the user's question using ONLY the information provided in the documents below and with the same LANGUAGE as the user's question. 
 
 IMPORTANT INSTRUCTIONS:
@@ -179,7 +195,8 @@ ANSWER:"""
         }
     ]
 
-    response = call_deepseek_v3(messages, temperature=0.2, max_tokens=1500)
+    # response = call_gpt3(messages)
+    response = call_deepseek_v3(messages)
 
     if is_no_information_response(response):
         return None
