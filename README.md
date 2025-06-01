@@ -22,11 +22,7 @@ The application is built using **Streamlit**, providing a simple and interactive
 
 ### 🔎 Example
 
-![Question Example](captures/question_example.png)
-*User asks a legal question in Arabic and receives a precise answer with source links.*
-
-![Search Result](captures/search_result.png)
-*Relevant articles from the Journal Officiel displayed below the answer.*
+![interface](images/image1.png)
 
 ##  Future Work
 
