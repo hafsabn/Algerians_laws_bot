@@ -22,7 +22,7 @@ The application is built using **Streamlit**, providing a simple and interactive
 
 ### 🔎 Example
 
-![interface](images/image1.png)
+![interface](images/image1.jpg)
 
 ##  Future Work
 
