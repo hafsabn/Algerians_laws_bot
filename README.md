@@ -34,3 +34,8 @@ The application is built using **Streamlit**, providing a simple and interactive
 - Contact the *Journal Officiel* authority to obtain high-quality official documents  
 - Use local LLMs to ensure better data privacy and protection
 
+## ✅ Final Note
+
+This project aims to make Algerian legal texts more accessible and easier to understand using the power of AI. It’s still a work in progress, and any feedback or ideas are welcome!
+
+
