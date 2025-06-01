@@ -23,7 +23,14 @@ The application is built using **Streamlit**, providing a simple and interactive
 ### 🔎 Example
 
 ![interface](images/image1.jpg)
+![result](images/image2.jpg)
 
+
+## Testt
+<p float="left">
+  <img src="images/image1.jpg" width="45%" style="margin-right:5%" />
+  <img src="images/image2.jpg" width="45%" />
+</p>
 ##  Future Work
 
 - Add support for more years of the *Journal Officiel*  
