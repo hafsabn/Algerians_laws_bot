@@ -23,9 +23,10 @@ The application is built using **Streamlit**, providing a simple and interactive
 ### 🔎 Example
 
 <p float="left">
-  <img src="images/image1.jpg" width="50%" style="margin-right:5%" />
-  <img src="images/image2.jpg" width="50%" />
+  <img src="images/image1.jpg" width="47%" style="margin-right:5%" />
+  <img src="images/image2.jpg" width="47%" />
 </p>
+
 ##  Future Work
 
 - Add support for more years of the *Journal Officiel*  
