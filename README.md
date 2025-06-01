@@ -12,7 +12,7 @@ We combined several tools and models to make this possible:
 - **Language Models**: Used hosted LLMs like **DeepSeek**, **ChatGPT**, **Bloomz**,etc., to generate answers  
 - **RAG Approach**: Combined search (retrieval) with AI-generated answers (generation) for accurate and context-aware responses
 
-## 🖥️ Interface
+## Interface
 
 The application is built using **Streamlit**, providing a simple and interactive web interface where users can:
 
@@ -20,7 +20,7 @@ The application is built using **Streamlit**, providing a simple and interactive
 - View AI-generated answers with references to the source documents
 - Explore matched articles from the *Journal Officiel*
 
-### 🔎 Example
+### Example
 
 <p float="left">
   <img src="images/image1.jpg" width="47%" style="margin-right:5%" />
@@ -34,7 +34,7 @@ The application is built using **Streamlit**, providing a simple and interactive
 - Contact the *Journal Officiel* authority to obtain high-quality official documents  
 - Use local LLMs to ensure better data privacy and protection
 
-## ✅ Final Note
+## Final Note
 
 This project aims to make Algerian legal texts more accessible and easier to understand using the power of AI. It’s still a work in progress, and any feedback or ideas are welcome!
 
