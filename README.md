@@ -18,7 +18,7 @@ The application is built using **Streamlit**, providing a simple and interactive
 
 - Ask legal questions in any language
 - View AI-generated answers with references to the source documents
-- Explore matched articles from the *Journal Officiel*
+- Explore matched articles from the *Journal Officiel*.
 
 ### Example
 
