@@ -1,4 +1,4 @@
-# 🇩🇿 Algerian Laws Bot
+# 🇩🇿  Algerian Laws Bot
 
 **Algerian Laws Bot** is an AI assistant that can answer any legal question based on the official Algerian laws published in the [*Journal Officiel*](https://www.joradp.dz/HFR/Index.htm). It reads and understands the content of these official gazettes, then allows users to search or ask questions in natural language — and get answers directly from the source.
 
