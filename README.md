@@ -31,8 +31,8 @@ The application is built using **Streamlit**, providing a simple and interactive
 
 - Add support for more years of the *Journal Officiel*  
 - Implement user authentication, favorites/bookmarks, and chat history  
-- Contact the *Journal Officiel* authority to obtain high-quality official documents  
-- Use local LLMs to ensure better data privacy and protection
+- Contact the *Journal Officiel* authority to obtain high-quality official documents.
+- Use local LLMs to ensure better data privacy and protection.
 
 ## Final Note
 
